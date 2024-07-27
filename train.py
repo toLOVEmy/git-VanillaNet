@@ -75,7 +75,7 @@ def main():
 
     batch_size = 16
     lr = 0.0001
-    note = 'vanillanet5_1e-7'
+    note = 'vanillanet5_1e-7_accumulation'
     nw = min([os.cpu_count(), batch_size if batch_size > 1 else 0, 0])
     print('Using {} dataloader workers every process'.format(nw))
 
@@ -108,6 +108,7 @@ def main():
     optimizer = optim.Adam(params, lr=lr)
     scheduler = optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=60, eta_min=1e-7)
 
+    accumulation_steps = 4  # 进行几次梯度累积后再更新权重
     if not os.path.exists('./weights'):
         os.makedirs('./weights')
 
@@ -118,17 +119,26 @@ def main():
         running_loss = 0.0
         train_bar = tqdm(train_loader, file=sys.stdout)
         correct_train = 0
+        optimizer.zero_grad()  # 在每个epoch开始前清空梯度
+
         for step, data in enumerate(train_bar):
             images, labels = data
-            optimizer.zero_grad()
             logits = net(images.to(device))
             loss = loss_function(logits, labels.to(device))
             loss.backward()
-            optimizer.step()
+
+            if (step + 1) % accumulation_steps == 0:
+                optimizer.step()
+                optimizer.zero_grad()
+
             running_loss += loss.item()
             predict_y = torch.max(logits, dim=1)[1]
             correct_train += torch.eq(predict_y, labels.to(device)).sum().item()
             train_bar.desc = "train epoch[{}/{}] loss:{:.3f}".format(epoch + 1, epochs, loss)
+
+        if (step + 1) % accumulation_steps != 0:
+            optimizer.step()
+            optimizer.zero_grad()
 
         train_acc = correct_train / train_num
 
